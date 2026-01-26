@@ -1,0 +1,10 @@
+# Base model configuration for Discrete Diffusion Transformer
+# This matches the trained checkpoint configuration
+
+block_size: 256         # Maximum sequence length
+n_layer: 10             # Number of transformer blocks
+n_head: 10              # Number of attention heads
+n_embd: 640             # Embedding dimension
+cond_dim: 160           # Conditioning (timestep embedding) dimension
+dropout: 0.2            # Dropout probability (set to 0.0 for inference)
+bias: false             # Whether to use bias in linear layers

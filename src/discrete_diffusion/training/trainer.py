@@ -1,0 +1,348 @@
+"""Training utilities for discrete diffusion models."""
+
+import os
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Tuple
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+from ..data.tokenizer import CharacterLevelTokenizer
+from ..diffusion.noise_schedule import GeometricNoise
+from .loss import compute_loss
+
+# Vocab size is fixed and determined by the tokenizer
+VOCAB_SIZE = CharacterLevelTokenizer().vocab_size
+
+
+@dataclass
+class TrainingConfig:
+    """Configuration for training."""
+
+    learning_rate: float = 5e-5
+    weight_decay: float = 0.01
+    betas: Tuple[float, float] = (0.9, 0.999)
+    gradient_clip: float = 1.0
+    num_epochs: int = 30
+    sigma_min: float = 1e-4
+    sigma_max: float = 20.0
+    sampling_eps: float = 1e-3
+    checkpoint_dir: str = "./checkpoints"
+    save_every: int = 5
+    save_hf_format: bool = True
+
+
+@dataclass
+class TrainerCallback:
+    """Base callback for training events."""
+
+    def on_epoch_start(self, epoch: int, trainer: "Trainer") -> None:
+        pass
+
+    def on_epoch_end(self, epoch: int, train_loss: float, val_loss: float, trainer: "Trainer") -> None:
+        pass
+
+    def on_batch_end(self, batch_idx: int, loss: float, metrics: Dict, trainer: "Trainer") -> None:
+        pass
+
+    def on_train_end(self, trainer: "Trainer") -> None:
+        pass
+
+
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    val_loss: float,
+    checkpoint_dir: str,
+    filename: str,
+    save_hf: bool = False,
+) -> str:
+    """
+    Save a training checkpoint.
+
+    Args:
+        model: Model to save
+        optimizer: Optimizer state to save
+        epoch: Current epoch number
+        val_loss: Validation loss at this checkpoint
+        checkpoint_dir: Directory to save to
+        filename: Checkpoint filename (without extension)
+        save_hf: Whether to also save in HuggingFace format
+
+    Returns:
+        Path to saved checkpoint
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "val_loss": val_loss,
+    }
+
+    checkpoint_path = os.path.join(checkpoint_dir, f"{filename}.pth")
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Saved checkpoint: {checkpoint_path}")
+
+    if save_hf:
+        hf_dir = os.path.join(checkpoint_dir, f"{filename}_hf")
+        model.save_pretrained(hf_dir)
+        print(f"Saved HuggingFace checkpoint: {hf_dir}")
+
+    return checkpoint_path
+
+
+def load_checkpoint(
+    model: nn.Module,
+    optimizer: Optional[torch.optim.Optimizer],
+    checkpoint_path: str,
+    device: str,
+) -> Tuple[int, float]:
+    """
+    Load a training checkpoint.
+
+    Args:
+        model: Model to load weights into
+        optimizer: Optimizer to load state into (optional)
+        checkpoint_path: Path to checkpoint file
+        device: Device to load to
+
+    Returns:
+        Tuple of (epoch, val_loss) from the checkpoint
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    epoch = checkpoint.get("epoch", 0)
+    val_loss = checkpoint.get("val_loss", float("inf"))
+
+    print(f"Loaded checkpoint from epoch {epoch} with val_loss {val_loss:.4f}")
+    return epoch, val_loss
+
+
+class Trainer:
+    """
+    Trainer for discrete diffusion models.
+
+    Handles the training loop, validation, checkpointing, and callbacks.
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        config: Optional[TrainingConfig] = None,
+        device: str = "cuda",
+        callbacks: Optional[List[TrainerCallback]] = None,
+    ):
+        """
+        Initialize the trainer.
+
+        Args:
+            model: DiscreteDiffusionTransformer to train
+            train_loader: Training DataLoader
+            val_loader: Validation DataLoader
+            config: Training configuration
+            device: Device to train on
+            callbacks: List of callbacks for training events
+        """
+        self.config = config or TrainingConfig()
+        self.device = device
+        self.callbacks = callbacks or []
+
+        self.model = model.to(device)
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.vocab_size = VOCAB_SIZE
+
+        # Noise schedule
+        self.noise_schedule = GeometricNoise(
+            sigma_min=self.config.sigma_min,
+            sigma_max=self.config.sigma_max,
+        )
+
+        # Optimizer
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.config.learning_rate,
+            betas=self.config.betas,
+            weight_decay=self.config.weight_decay,
+        )
+
+        # Training state
+        self.current_epoch = 0
+        self.best_val_loss = float("inf")
+
+    @torch.no_grad()
+    def validate(self) -> float:
+        """Run validation and return average loss."""
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
+
+        for batch in self.val_loader:
+            x0 = batch["input_ids"].to(self.device)
+            loss, _ = compute_loss(
+                model=self.model,
+                x0=x0,
+                noise_schedule=self.noise_schedule,
+                vocab_size=self.vocab_size,
+                sampling_eps=self.config.sampling_eps,
+            )
+            total_loss += loss.item()
+            num_batches += 1
+
+        self.model.train()
+        return total_loss / num_batches if num_batches > 0 else float("inf")
+
+    def train_epoch(self) -> float:
+        """Train for one epoch and return average loss."""
+        self.model.train()
+        epoch_loss = 0.0
+        num_batches = 0
+
+        for batch_idx, batch in enumerate(self.train_loader):
+            x0 = batch["input_ids"].to(self.device)
+
+            # Compute loss
+            loss, metrics = compute_loss(
+                model=self.model,
+                x0=x0,
+                noise_schedule=self.noise_schedule,
+                vocab_size=self.vocab_size,
+                sampling_eps=self.config.sampling_eps,
+            )
+
+            # Backward pass
+            self.optimizer.zero_grad()
+            loss.backward()
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.config.gradient_clip
+            )
+
+            # Optimizer step
+            self.optimizer.step()
+
+            epoch_loss += loss.item()
+            num_batches += 1
+
+            # Callbacks
+            for callback in self.callbacks:
+                callback.on_batch_end(batch_idx, loss.item(), metrics, self)
+
+            # Print progress
+            if batch_idx % 100 == 0:
+                print(
+                    f"Epoch {self.current_epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}"
+                )
+
+        return epoch_loss / num_batches
+
+    def train(
+        self,
+        num_epochs: Optional[int] = None,
+        resume_from: Optional[str] = None,
+    ) -> None:
+        """
+        Run the full training loop.
+
+        Args:
+            num_epochs: Number of epochs (overrides config if provided)
+            resume_from: Path to checkpoint to resume from
+        """
+        num_epochs = num_epochs or self.config.num_epochs
+        os.makedirs(self.config.checkpoint_dir, exist_ok=True)
+
+        # Resume from checkpoint if specified
+        if resume_from is not None:
+            self.current_epoch, self.best_val_loss = load_checkpoint(
+                self.model, self.optimizer, resume_from, self.device
+            )
+            self.current_epoch += 1  # Start from next epoch
+
+        print(f"Starting training for {num_epochs} epochs...")
+        print(f"Device: {self.device}")
+        print(f"Vocabulary size: {self.vocab_size}")
+        print(f"Learning rate: {self.config.learning_rate}")
+        if resume_from:
+            print(
+                f"Resuming from epoch {self.current_epoch}, best val_loss: {self.best_val_loss:.4f}"
+            )
+        print("=" * 60)
+
+        for epoch in range(self.current_epoch, num_epochs):
+            self.current_epoch = epoch
+
+            # Callbacks
+            for callback in self.callbacks:
+                callback.on_epoch_start(epoch, self)
+
+            # Train
+            train_loss = self.train_epoch()
+            print(f"Epoch {epoch} complete. Average train loss: {train_loss:.4f}")
+
+            # Validate
+            val_loss = self.validate()
+            print(f"Validation loss: {val_loss:.4f}")
+
+            # Callbacks
+            for callback in self.callbacks:
+                callback.on_epoch_end(epoch, train_loss, val_loss, self)
+
+            # Save best checkpoint
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                save_checkpoint(
+                    self.model,
+                    self.optimizer,
+                    epoch,
+                    val_loss,
+                    self.config.checkpoint_dir,
+                    "best_model",
+                    save_hf=self.config.save_hf_format,
+                )
+                print(f"New best model! Val loss: {val_loss:.4f}")
+
+            print("-" * 60)
+
+            # Save periodic checkpoint
+            if (epoch + 1) % self.config.save_every == 0:
+                save_checkpoint(
+                    self.model,
+                    self.optimizer,
+                    epoch,
+                    val_loss,
+                    self.config.checkpoint_dir,
+                    f"model_epoch_{epoch+1}",
+                    save_hf=self.config.save_hf_format,
+                )
+
+        # Final checkpoint
+        final_val_loss = self.validate()
+        save_checkpoint(
+            self.model,
+            self.optimizer,
+            num_epochs - 1,
+            final_val_loss,
+            self.config.checkpoint_dir,
+            "final_model",
+            save_hf=self.config.save_hf_format,
+        )
+
+        # Callbacks
+        for callback in self.callbacks:
+            callback.on_train_end(self)
+
+        print("=" * 60)
+        print("Training complete!")
+        print(f"Best validation loss: {self.best_val_loss:.4f}")
+        print(f"Final validation loss: {final_val_loss:.4f}")

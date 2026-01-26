@@ -1,0 +1,30 @@
+# Default training configuration
+
+# Optimizer
+learning_rate: 5e-5
+weight_decay: 0.01
+betas: [0.9, 0.999]
+gradient_clip: 1.0
+
+# Training schedule
+num_epochs: 30
+batch_size: 32
+
+# Noise schedule
+sigma_min: 1e-4
+sigma_max: 20.0
+
+# Data
+dataset_name: "roneneldan/TinyStories"
+train_samples: 50000
+val_samples: 2000
+context_length: 256
+num_workers: 2
+
+# Checkpointing
+checkpoint_dir: "./checkpoints"
+save_every: 5
+save_hf_format: true
+
+# Sampling epsilon (avoid t=0 or t=1)
+sampling_eps: 1e-3
