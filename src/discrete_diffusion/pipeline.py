@@ -238,9 +238,16 @@ class DiffusionPipeline:
         # Convert to tensor
         x = torch.tensor([initial_tokens], device=self.device, dtype=torch.long)
 
-        # Find underscore token ID and replace with random tokens
+        # Find underscore token ID and create masks
         underscore_token_id = self.tokenizer.encode("_")[0]
         underscore_mask = (x == underscore_token_id)
+
+        # Create preserve_mask: True where we should PRESERVE (non-underscore)
+        # False where we should INFILL (underscore)
+        preserve_mask = ~underscore_mask  # (1, seq_len)
+
+        # Store the preserved tokens (before randomization)
+        preserved_tokens = x.clone()
 
         # Generate random tokens for underscore positions
         random_tokens = torch.randint(
@@ -287,7 +294,10 @@ class DiffusionPipeline:
             probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-10)
 
             # Sample next tokens
-            x = sample_categorical(probs)
+            x_new = sample_categorical(probs)
+
+            # Apply mask: preserve non-underscore positions
+            x = torch.where(preserve_mask, preserved_tokens, x_new)
 
             # Decode and yield intermediate result
             intermediate_text = self.tokenizer.decode(x[0].tolist())

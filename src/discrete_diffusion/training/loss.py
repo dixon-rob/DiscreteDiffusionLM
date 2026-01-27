@@ -109,6 +109,7 @@ def compute_loss(
     t: Optional[torch.Tensor] = None,
     x_t: Optional[torch.Tensor] = None,
     sampling_eps: float = 1e-3,
+    mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute the full discrete diffusion loss for a batch.
@@ -121,6 +122,7 @@ def compute_loss(
         t: [B] timesteps in [0,1], sampled uniformly if None
         x_t: [B, L] noised tokens, generated if None
         sampling_eps: Epsilon to avoid t=0 or t=1
+        mask: Optional boolean mask [B, L] where True = preserve (don't compute loss)
 
     Returns:
         loss: Scalar loss value
@@ -138,7 +140,7 @@ def compute_loss(
 
     # 3) Generate noised sequences if not provided
     if x_t is None:
-        x_t = perturb_batch(x0, sigma_bar, vocab_size)
+        x_t = perturb_batch(x0, sigma_bar, vocab_size, mask=mask)
 
     # 4) Model forward pass
     output = model(x_t, sigma_bar)
@@ -156,7 +158,23 @@ def compute_loss(
     # 6) Weight by sigma(t) and average
     # This is importance weighting - higher noise rates get more weight
     weighted_loss = sigma[:, None] * loss_per_token  # [B, L]
-    loss = weighted_loss.mean()  # Scalar
+
+    # Apply mask: only compute loss on non-masked positions
+    if mask is not None:
+        # mask=True means "preserve this position" (don't compute loss)
+        # Invert: compute loss where mask=False
+        loss_mask = ~mask  # [B, L]
+        weighted_loss = weighted_loss * loss_mask.float()
+
+        # Average over non-masked positions only
+        num_active = loss_mask.sum()
+        if num_active > 0:
+            loss = weighted_loss.sum() / num_active
+        else:
+            loss = torch.tensor(0.0, device=weighted_loss.device)
+    else:
+        # No masking: average over all positions
+        loss = weighted_loss.mean()  # Scalar
 
     # 7) Collect metrics for logging
     metrics = {

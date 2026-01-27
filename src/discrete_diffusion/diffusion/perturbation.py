@@ -7,6 +7,7 @@ def perturb_batch(
     batch: torch.Tensor,
     sigma_bar: torch.Tensor,
     vocab_size: int,
+    mask: torch.Tensor = None,
 ) -> torch.Tensor:
     """
     Diffuse each token independently (forward diffusion process).
@@ -19,6 +20,7 @@ def perturb_batch(
         sigma_bar: Tensor of shape [] (scalar) or [B] (per-sample noise levels)
                    The accumulated noise sigma_bar(t)
         vocab_size: int, size of vocabulary (N)
+        mask: Optional boolean mask [B, L] where True = preserve (don't perturb)
 
     Returns:
         batch_pert: perturbed batch, LongTensor of shape [B, L]
@@ -51,5 +53,9 @@ def perturb_batch(
 
     # 4) Apply moves; else keep original
     batch_pert = torch.where(move_mask, new_ids, batch)
+
+    # 5) Apply mask: preserve tokens where mask=True
+    if mask is not None:
+        batch_pert = torch.where(mask, batch, batch_pert)
 
     return batch_pert

@@ -153,8 +153,8 @@ def create_interface(app: DiffusionApp):
 
                 output_text = gr.Textbox(
                     label="Generated Text",
-                    lines=20,
-                    max_lines=30,
+                    lines=5,
+                    max_lines=10,
                     placeholder="Generated text will appear here...",
                     interactive=False,
                 )

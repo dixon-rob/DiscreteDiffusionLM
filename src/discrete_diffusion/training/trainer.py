@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
+from ..data.masking import generate_batch_masks
 from ..data.tokenizer import CharacterLevelTokenizer
 from ..diffusion.noise_schedule import GeometricNoise
 from .loss import compute_loss
@@ -256,6 +257,16 @@ class Trainer:
         for batch in self.val_loader:
             x0 = batch["input_ids"].to(self.device)
 
+            # Generate masks for this batch
+            batch_size, seq_len = x0.shape
+            masks = generate_batch_masks(
+                batch_size=batch_size,
+                seq_len=seq_len,
+                min_span_len=3,
+                max_span_len=50,
+                mask_fraction=0.5,
+            ).to(self.device)
+
             # Use autocast if mixed precision is enabled
             if self.autocast_dtype is not None:
                 with autocast(device_type=self.device, dtype=self.autocast_dtype):
@@ -265,6 +276,7 @@ class Trainer:
                         noise_schedule=self.noise_schedule,
                         vocab_size=self.vocab_size,
                         sampling_eps=self.config.sampling_eps,
+                        mask=masks,
                     )
             else:
                 loss, _ = compute_loss(
@@ -273,6 +285,7 @@ class Trainer:
                     noise_schedule=self.noise_schedule,
                     vocab_size=self.vocab_size,
                     sampling_eps=self.config.sampling_eps,
+                    mask=masks,
                 )
 
             total_loss += loss.item()
@@ -290,6 +303,16 @@ class Trainer:
         for batch_idx, batch in enumerate(self.train_loader):
             x0 = batch["input_ids"].to(self.device)
 
+            # Generate masks for this batch
+            batch_size, seq_len = x0.shape
+            masks = generate_batch_masks(
+                batch_size=batch_size,
+                seq_len=seq_len,
+                min_span_len=3,
+                max_span_len=50,
+                mask_fraction=0.5,
+            ).to(self.device)
+
             # Compute loss with autocast if enabled
             if self.autocast_dtype is not None:
                 with autocast(device_type=self.device, dtype=self.autocast_dtype):
@@ -299,6 +322,7 @@ class Trainer:
                         noise_schedule=self.noise_schedule,
                         vocab_size=self.vocab_size,
                         sampling_eps=self.config.sampling_eps,
+                        mask=masks,
                     )
             else:
                 loss, metrics = compute_loss(
@@ -307,6 +331,7 @@ class Trainer:
                     noise_schedule=self.noise_schedule,
                     vocab_size=self.vocab_size,
                     sampling_eps=self.config.sampling_eps,
+                    mask=masks,
                 )
 
             # Gradient accumulation: scale loss and only step optimizer every N batches
