@@ -80,6 +80,7 @@ def main(cfg: DictConfig) -> None:
         sampling_eps=cfg.sampling_eps,
         checkpoint_dir=cfg.checkpoint_dir,
         save_every=cfg.save_every,
+        save_every_steps=cfg.get("save_every_steps", 0),
         save_hf_format=cfg.save_hf_format,
         mixed_precision=cfg.mixed_precision,
         gradient_checkpointing=cfg.gradient_checkpointing,

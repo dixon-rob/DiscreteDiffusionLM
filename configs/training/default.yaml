@@ -47,7 +47,8 @@ num_workers: 2
 
 # Checkpointing
 checkpoint_dir: "./checkpoints"
-save_every: 1  # Save every epoch
+save_every: 1  # Save every N epochs
+save_every_steps: 5000  # Save every N steps (0 = disabled)
 save_hf_format: true
 
 # Sampling epsilon (avoid t=0 or t=1)

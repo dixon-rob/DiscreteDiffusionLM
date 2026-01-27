@@ -37,7 +37,8 @@ class TrainingConfig:
     sigma_max: float = 20.0
     sampling_eps: float = 1e-3
     checkpoint_dir: str = "./checkpoints"
-    save_every: int = 5
+    save_every: int = 5  # Save every N epochs
+    save_every_steps: int = 0  # Save every N steps (0 = disabled)
     save_hf_format: bool = True
     mixed_precision: Literal["no", "fp16", "bf16"] = "no"
     gradient_checkpointing: bool = False
@@ -66,6 +67,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     epoch: int,
+    global_step: int,
     val_loss: float,
     checkpoint_dir: str,
     filename: str,
@@ -79,6 +81,7 @@ def save_checkpoint(
         model: Model to save
         optimizer: Optimizer state to save
         epoch: Current epoch number
+        global_step: Global step count across all epochs
         val_loss: Validation loss at this checkpoint
         checkpoint_dir: Directory to save to
         filename: Checkpoint filename (without extension)
@@ -92,6 +95,7 @@ def save_checkpoint(
 
     checkpoint = {
         "epoch": epoch,
+        "global_step": global_step,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "val_loss": val_loss,
@@ -102,7 +106,7 @@ def save_checkpoint(
 
     checkpoint_path = os.path.join(checkpoint_dir, f"{filename}.pth")
     torch.save(checkpoint, checkpoint_path)
-    print(f"Saved checkpoint: {checkpoint_path}")
+    print(f"Saved checkpoint: {checkpoint_path} (epoch {epoch}, step {global_step})")
 
     if save_hf:
         hf_dir = os.path.join(checkpoint_dir, f"{filename}_hf")
@@ -118,7 +122,7 @@ def load_checkpoint(
     checkpoint_path: str,
     device: str,
     scaler: Optional[GradScaler] = None,
-) -> Tuple[int, float]:
+) -> Tuple[int, int, float]:
     """
     Load a training checkpoint.
 
@@ -130,7 +134,7 @@ def load_checkpoint(
         scaler: Optional GradScaler to load state into (for mixed precision)
 
     Returns:
-        Tuple of (epoch, val_loss) from the checkpoint
+        Tuple of (epoch, global_step, val_loss) from the checkpoint
     """
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -142,10 +146,11 @@ def load_checkpoint(
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
     epoch = checkpoint.get("epoch", 0)
+    global_step = checkpoint.get("global_step", 0)
     val_loss = checkpoint.get("val_loss", float("inf"))
 
-    print(f"Loaded checkpoint from epoch {epoch} with val_loss {val_loss:.4f}")
-    return epoch, val_loss
+    print(f"Loaded checkpoint from epoch {epoch}, step {global_step} with val_loss {val_loss:.4f}")
+    return epoch, global_step, val_loss
 
 
 class Trainer:
@@ -213,6 +218,7 @@ class Trainer:
 
         # Training state
         self.current_epoch = 0
+        self.global_step = 0
         self.best_val_loss = float("inf")
 
         # Mixed precision setup
@@ -327,6 +333,7 @@ class Trainer:
                     )
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
+                    self.global_step += 1
             else:
                 # BF16 or no mixed precision
                 loss.backward()
@@ -336,10 +343,27 @@ class Trainer:
                         self.model.parameters(), self.config.gradient_clip
                     )
                     self.optimizer.step()
+                    self.global_step += 1
 
             # Track unscaled loss for logging
             epoch_loss += loss.item() * (self.config.gradient_accumulation_steps if is_accumulating else 1)
             num_batches += 1
+
+            # Step-based checkpointing
+            if should_step and self.config.save_every_steps > 0:
+                if self.global_step % self.config.save_every_steps == 0:
+                    # Quick checkpoint without validation (to avoid slowing down training)
+                    save_checkpoint(
+                        self.model,
+                        self.optimizer,
+                        self.current_epoch,
+                        self.global_step,
+                        self.best_val_loss,  # Use best known val loss
+                        self.config.checkpoint_dir,
+                        f"checkpoint_step_{self.global_step}",
+                        save_hf=False,  # Don't save HF format for frequent checkpoints
+                        scaler=self.scaler,
+                    )
 
             # Callbacks
             for callback in self.callbacks:
@@ -348,7 +372,7 @@ class Trainer:
             # Print progress
             if batch_idx % 100 == 0:
                 print(
-                    f"Epoch {self.current_epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}"
+                    f"Epoch {self.current_epoch}, Step {self.global_step}, Batch {batch_idx}, Loss: {loss.item():.4f}"
                 )
 
         return epoch_loss / num_batches
@@ -370,7 +394,7 @@ class Trainer:
 
         # Resume from checkpoint if specified
         if resume_from is not None:
-            self.current_epoch, self.best_val_loss = load_checkpoint(
+            self.current_epoch, self.global_step, self.best_val_loss = load_checkpoint(
                 self.model, self.optimizer, resume_from, self.device, self.scaler
             )
             self.current_epoch += 1  # Start from next epoch
@@ -379,9 +403,11 @@ class Trainer:
         print(f"Device: {self.device}")
         print(f"Vocabulary size: {self.vocab_size}")
         print(f"Learning rate: {self.config.learning_rate}")
+        if self.config.save_every_steps > 0:
+            print(f"Step-based checkpointing enabled: every {self.config.save_every_steps} steps")
         if resume_from:
             print(
-                f"Resuming from epoch {self.current_epoch}, best val_loss: {self.best_val_loss:.4f}"
+                f"Resuming from epoch {self.current_epoch}, step {self.global_step}, best val_loss: {self.best_val_loss:.4f}"
             )
         print("=" * 60)
 
@@ -411,6 +437,7 @@ class Trainer:
                     self.model,
                     self.optimizer,
                     epoch,
+                    self.global_step,
                     val_loss,
                     self.config.checkpoint_dir,
                     "best_model",
@@ -427,6 +454,7 @@ class Trainer:
                     self.model,
                     self.optimizer,
                     epoch,
+                    self.global_step,
                     val_loss,
                     self.config.checkpoint_dir,
                     f"model_epoch_{epoch+1}",
@@ -440,6 +468,7 @@ class Trainer:
             self.model,
             self.optimizer,
             num_epochs - 1,
+            self.global_step,
             final_val_loss,
             self.config.checkpoint_dir,
             "final_model",
