@@ -67,10 +67,15 @@ def setup_dataloaders(
     dataset = load_dataset(dataset_name)
 
     # Select subsets
-    train_subset = dataset["train"].select(range(min(train_samples, len(dataset["train"]))))
-    val_subset = dataset["validation"].select(
-        range(min(val_samples, len(dataset["validation"])))
-    )
+    # If train_samples/val_samples is None, use full dataset
+    train_size = len(dataset["train"]) if train_samples is None else min(train_samples, len(dataset["train"]))
+    val_size = len(dataset["validation"]) if val_samples is None else min(val_samples, len(dataset["validation"]))
+
+    print(f"Using {train_size:,} training samples and {val_size:,} validation samples")
+
+    train_subset = dataset["train"].select(range(train_size))
+    val_subset = dataset["validation"].select(range(val_size))
+
     dataset_splits = {
         "train": train_subset,
         "validation": val_subset,
