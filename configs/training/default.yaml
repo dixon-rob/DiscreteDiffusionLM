@@ -16,6 +16,10 @@ batch_size: 32
 # no: Disable mixed precision
 mixed_precision: "bf16"
 
+# Gradient checkpointing: saves memory by recomputing activations during backward pass
+# Reduces memory usage but adds compute overhead
+gradient_checkpointing: true
+
 # Noise schedule
 sigma_min: 1e-4
 sigma_max: 20.0

@@ -34,6 +34,8 @@ class TrainingConfig:
     save_hf_format: bool = True
     # Mixed precision: "no", "fp16", or "bf16"
     mixed_precision: Literal["no", "fp16", "bf16"] = "no"
+    # Gradient checkpointing: trade compute for memory
+    gradient_checkpointing: bool = False
 
 
 @dataclass
@@ -204,6 +206,11 @@ class Trainer:
 
         if self.mixed_precision != "no":
             print(f"Mixed precision training enabled: {self.mixed_precision}")
+
+        # Gradient checkpointing setup
+        if self.config.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+            print("Gradient checkpointing enabled")
 
     @torch.no_grad()
     def validate(self) -> float:

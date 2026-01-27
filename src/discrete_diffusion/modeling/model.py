@@ -20,10 +20,12 @@ class DiscreteDiffusionTransformer(PreTrainedModel):
     """
 
     config_class = DiscreteDiffusionConfig
+    _supports_gradient_checkpointing = True
 
     def __init__(self, config: DiscreteDiffusionConfig):
         super().__init__(config)
         self.config = config
+        self.gradient_checkpointing = False
 
         # Timestep/noise embedder
         self.sigma_map = TimestepEmbedder(config.cond_dim)
@@ -74,6 +76,11 @@ class DiscreteDiffusionTransformer(PreTrainedModel):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def _set_gradient_checkpointing(self, module: nn.Module, value: bool = False) -> None:
+        """Enable/disable gradient checkpointing for the model."""
+        if isinstance(module, DiscreteDiffusionTransformer):
+            module.gradient_checkpointing = value
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -116,8 +123,15 @@ class DiscreteDiffusionTransformer(PreTrainedModel):
         x = self.transformer.drop(tok_emb + pos_emb)
 
         # Apply transformer blocks
-        for block in self.transformer.h:
-            x = block(x, c)
+        if self.gradient_checkpointing and self.training:
+            # Use gradient checkpointing to save memory
+            for block in self.transformer.h:
+                x = torch.utils.checkpoint.checkpoint(
+                    block, x, c, use_reentrant=False
+                )
+        else:
+            for block in self.transformer.h:
+                x = block(x, c)
 
         # Final layer norm
         x = self.transformer.ln_f(x)

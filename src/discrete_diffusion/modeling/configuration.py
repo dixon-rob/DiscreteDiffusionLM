@@ -33,6 +33,7 @@ class DiscreteDiffusionConfig(PretrainedConfig):
         cond_dim: int = 384,
         dropout: float = 0.1,
         bias: bool = True,
+        gradient_checkpointing: bool = False,
         **kwargs,
     ):
         # Remove vocab_size from kwargs if present (for backwards compatibility with saved configs)
@@ -46,3 +47,4 @@ class DiscreteDiffusionConfig(PretrainedConfig):
         self.cond_dim = cond_dim
         self.dropout = dropout
         self.bias = bias
+        self.gradient_checkpointing = gradient_checkpointing
