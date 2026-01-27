@@ -16,6 +16,11 @@ Or with development dependencies:
 pip install -e ".[dev]"
 ```
 
+After installation, you can use the command-line tools:
+- `ddlm-train` - Train a model
+- `ddlm-generate --model <model_path> --visualize` - Generate text from a trained model
+- `ddlm-ui --model <model_path>` - Launch the Gradio web interface
+
 ## Quick Start
 
 ### Generate text with a trained model
@@ -100,6 +105,34 @@ python scripts/generate.py --model ./checkpoints/best_model_hf --visualize
 # Custom sequence length (must match model's block_size)
 python scripts/generate.py --model ./checkpoints/best_model_hf --seq-len 128
 ```
+
+### Gradio Web UI
+
+Launch an interactive web interface for text generation:
+
+```bash
+# Using the installed command (after pip install -e .)
+ddlm-ui --model ./checkpoints/best_model_hf
+
+# Or run the script directly
+python scripts/gradio_app.py --model ./checkpoints/best_model_hf
+
+# Create a public share link (accessible from anywhere)
+ddlm-ui --model ./checkpoints/best_model_hf --share
+
+# Use a custom port
+ddlm-ui --model ./checkpoints/best_model_hf --port 8080
+
+# Make accessible on local network
+ddlm-ui --model ./checkpoints/best_model_hf --server-name 0.0.0.0
+```
+
+The web UI includes:
+- Interactive sliders for all generation parameters
+- Real-time progress tracking
+- Multiple sample generation
+- Copy-to-clipboard functionality
+- Pre-configured example settings
 
 ## Testing
 

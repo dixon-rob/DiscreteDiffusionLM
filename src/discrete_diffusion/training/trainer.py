@@ -362,7 +362,7 @@ class Trainer:
                         self.best_val_loss,  # Use best known val loss
                         self.config.checkpoint_dir,
                         "checkpoint_latest",  # Fixed filename - overwrites previous
-                        save_hf=False,  # Don't save HF format for frequent checkpoints
+                        save_hf=self.config.save_hf_format,
                         scaler=self.scaler,
                     )
 

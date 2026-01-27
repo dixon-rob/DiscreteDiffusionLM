@@ -19,8 +19,12 @@ from discrete_diffusion import (
     setup_dataloaders,
 )
 
+# Get absolute path to configs directory
+SCRIPT_DIR = Path(__file__).parent.resolve()
+CONFIG_PATH = str(SCRIPT_DIR.parent / "configs")
 
-@hydra.main(version_base=None, config_path="../configs", config_name="training/default")
+
+@hydra.main(version_base=None, config_path=CONFIG_PATH, config_name="training/default")
 def main(cfg: DictConfig) -> None:
     """
     Train a discrete diffusion model.
