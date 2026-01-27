@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -32,10 +32,9 @@ class TrainingConfig:
     checkpoint_dir: str = "./checkpoints"
     save_every: int = 5
     save_hf_format: bool = True
-    # Mixed precision: "no", "fp16", or "bf16"
     mixed_precision: Literal["no", "fp16", "bf16"] = "no"
-    # Gradient checkpointing: trade compute for memory
     gradient_checkpointing: bool = False
+    gradient_accumulation_steps: int = 1
 
 
 @dataclass
@@ -212,6 +211,10 @@ class Trainer:
             self.model.gradient_checkpointing_enable()
             print("Gradient checkpointing enabled")
 
+        # Gradient accumulation setup
+        if self.config.gradient_accumulation_steps > 1:
+            print(f"Gradient accumulation enabled: {self.config.gradient_accumulation_steps} steps")
+
     @torch.no_grad()
     def validate(self) -> float:
         """Run validation and return average loss."""
@@ -275,27 +278,42 @@ class Trainer:
                     sampling_eps=self.config.sampling_eps,
                 )
 
-            # Backward pass
-            self.optimizer.zero_grad()
+            # Gradient accumulation: scale loss and only step optimizer every N batches
+            is_accumulating = self.config.gradient_accumulation_steps > 1
+            should_step = (batch_idx + 1) % self.config.gradient_accumulation_steps == 0
 
+            # Zero gradients at the start of accumulation
+            if batch_idx % self.config.gradient_accumulation_steps == 0:
+                self.optimizer.zero_grad()
+
+            # Scale loss for gradient accumulation
+            if is_accumulating:
+                loss = loss / self.config.gradient_accumulation_steps
+
+            # Backward pass
             if self.scaler is not None:
                 # FP16 with GradScaler
                 self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.config.gradient_clip
-                )
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+
+                if should_step:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config.gradient_clip
+                    )
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
             else:
                 # BF16 or no mixed precision
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.config.gradient_clip
-                )
-                self.optimizer.step()
 
-            epoch_loss += loss.item()
+                if should_step:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config.gradient_clip
+                    )
+                    self.optimizer.step()
+
+            # Track unscaled loss for logging
+            epoch_loss += loss.item() * (self.config.gradient_accumulation_steps if is_accumulating else 1)
             num_batches += 1
 
             # Callbacks

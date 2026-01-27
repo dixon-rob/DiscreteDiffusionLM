@@ -8,7 +8,7 @@ gradient_clip: 1.0
 
 # Training schedule
 num_epochs: 30
-batch_size: 32
+batch_size: 4
 
 # Mixed precision training ("no", "fp16", or "bf16")
 # bf16: RTX 3090/4090 and newer (Ampere/Ada architectures) - recommended
@@ -19,6 +19,11 @@ mixed_precision: "bf16"
 # Gradient checkpointing: saves memory by recomputing activations during backward pass
 # Reduces memory usage but adds compute overhead
 gradient_checkpointing: true
+
+# Gradient accumulation: accumulate gradients over N steps before optimizer update
+# Effective batch size = batch_size * gradient_accumulation_steps
+# Useful for simulating larger batch sizes when memory-constrained
+gradient_accumulation_steps: 8
 
 # Noise schedule
 sigma_min: 1e-4
