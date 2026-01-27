@@ -83,27 +83,24 @@ trainer.train()
 ### Training
 
 ```bash
-# Default training
-python scripts/train.py
-
-# With custom parameters
-python scripts/train.py learning_rate=1e-4 num_epochs=50
+# Default training (using configs/training/default.yaml)
+ddlm-train
 
 # Resume from checkpoint
-python scripts/train.py resume_from=./checkpoints/model_epoch_10.pth
+ddlm-train +resume_from=./checkpoints/checkpoint_latest.pth
 ```
 
 ### Generation
 
 ```bash
 # Generate samples
-python scripts/generate.py --model ./checkpoints/best_model_hf --num-samples 5
+ddlm-generate --model ./checkpoints/best_model_hf --num-samples 5
 
 # With visualization (watch denoising in real-time)
-python scripts/generate.py --model ./checkpoints/best_model_hf --visualize
+ddlm-generate --model ./checkpoints/best_model_hf --visualize
 
 # Custom sequence length (must match model's block_size)
-python scripts/generate.py --model ./checkpoints/best_model_hf --seq-len 128
+ddlm-generate --model ./checkpoints/best_model_hf --seq-len 128
 ```
 
 ### Gradio Web UI
