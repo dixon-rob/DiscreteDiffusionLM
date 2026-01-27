@@ -2,10 +2,11 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 from ..data.tokenizer import CharacterLevelTokenizer
@@ -31,6 +32,8 @@ class TrainingConfig:
     checkpoint_dir: str = "./checkpoints"
     save_every: int = 5
     save_hf_format: bool = True
+    # Mixed precision: "no", "fp16", or "bf16"
+    mixed_precision: Literal["no", "fp16", "bf16"] = "no"
 
 
 @dataclass
@@ -58,6 +61,7 @@ def save_checkpoint(
     checkpoint_dir: str,
     filename: str,
     save_hf: bool = False,
+    scaler: Optional[GradScaler] = None,
 ) -> str:
     """
     Save a training checkpoint.
@@ -70,6 +74,7 @@ def save_checkpoint(
         checkpoint_dir: Directory to save to
         filename: Checkpoint filename (without extension)
         save_hf: Whether to also save in HuggingFace format
+        scaler: Optional GradScaler state to save (for mixed precision)
 
     Returns:
         Path to saved checkpoint
@@ -82,6 +87,9 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "val_loss": val_loss,
     }
+
+    if scaler is not None:
+        checkpoint["scaler_state_dict"] = scaler.state_dict()
 
     checkpoint_path = os.path.join(checkpoint_dir, f"{filename}.pth")
     torch.save(checkpoint, checkpoint_path)
@@ -100,6 +108,7 @@ def load_checkpoint(
     optimizer: Optional[torch.optim.Optimizer],
     checkpoint_path: str,
     device: str,
+    scaler: Optional[GradScaler] = None,
 ) -> Tuple[int, float]:
     """
     Load a training checkpoint.
@@ -109,6 +118,7 @@ def load_checkpoint(
         optimizer: Optimizer to load state into (optional)
         checkpoint_path: Path to checkpoint file
         device: Device to load to
+        scaler: Optional GradScaler to load state into (for mixed precision)
 
     Returns:
         Tuple of (epoch, val_loss) from the checkpoint
@@ -118,6 +128,9 @@ def load_checkpoint(
 
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    if scaler is not None and "scaler_state_dict" in checkpoint:
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
     epoch = checkpoint.get("epoch", 0)
     val_loss = checkpoint.get("val_loss", float("inf"))
@@ -180,6 +193,18 @@ class Trainer:
         self.current_epoch = 0
         self.best_val_loss = float("inf")
 
+        # Mixed precision setup
+        self.mixed_precision = self.config.mixed_precision
+        self.scaler = GradScaler(self.device) if self.mixed_precision == "fp16" else None
+        self.autocast_dtype = {
+            "no": None,
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16,
+        }.get(self.mixed_precision)
+
+        if self.mixed_precision != "no":
+            print(f"Mixed precision training enabled: {self.mixed_precision}")
+
     @torch.no_grad()
     def validate(self) -> float:
         """Run validation and return average loss."""
@@ -189,13 +214,26 @@ class Trainer:
 
         for batch in self.val_loader:
             x0 = batch["input_ids"].to(self.device)
-            loss, _ = compute_loss(
-                model=self.model,
-                x0=x0,
-                noise_schedule=self.noise_schedule,
-                vocab_size=self.vocab_size,
-                sampling_eps=self.config.sampling_eps,
-            )
+
+            # Use autocast if mixed precision is enabled
+            if self.autocast_dtype is not None:
+                with autocast(device_type=self.device, dtype=self.autocast_dtype):
+                    loss, _ = compute_loss(
+                        model=self.model,
+                        x0=x0,
+                        noise_schedule=self.noise_schedule,
+                        vocab_size=self.vocab_size,
+                        sampling_eps=self.config.sampling_eps,
+                    )
+            else:
+                loss, _ = compute_loss(
+                    model=self.model,
+                    x0=x0,
+                    noise_schedule=self.noise_schedule,
+                    vocab_size=self.vocab_size,
+                    sampling_eps=self.config.sampling_eps,
+                )
+
             total_loss += loss.item()
             num_batches += 1
 
@@ -211,26 +249,44 @@ class Trainer:
         for batch_idx, batch in enumerate(self.train_loader):
             x0 = batch["input_ids"].to(self.device)
 
-            # Compute loss
-            loss, metrics = compute_loss(
-                model=self.model,
-                x0=x0,
-                noise_schedule=self.noise_schedule,
-                vocab_size=self.vocab_size,
-                sampling_eps=self.config.sampling_eps,
-            )
+            # Compute loss with autocast if enabled
+            if self.autocast_dtype is not None:
+                with autocast(device_type=self.device, dtype=self.autocast_dtype):
+                    loss, metrics = compute_loss(
+                        model=self.model,
+                        x0=x0,
+                        noise_schedule=self.noise_schedule,
+                        vocab_size=self.vocab_size,
+                        sampling_eps=self.config.sampling_eps,
+                    )
+            else:
+                loss, metrics = compute_loss(
+                    model=self.model,
+                    x0=x0,
+                    noise_schedule=self.noise_schedule,
+                    vocab_size=self.vocab_size,
+                    sampling_eps=self.config.sampling_eps,
+                )
 
             # Backward pass
             self.optimizer.zero_grad()
-            loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.config.gradient_clip
-            )
-
-            # Optimizer step
-            self.optimizer.step()
+            if self.scaler is not None:
+                # FP16 with GradScaler
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.config.gradient_clip
+                )
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                # BF16 or no mixed precision
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.config.gradient_clip
+                )
+                self.optimizer.step()
 
             epoch_loss += loss.item()
             num_batches += 1
@@ -265,7 +321,7 @@ class Trainer:
         # Resume from checkpoint if specified
         if resume_from is not None:
             self.current_epoch, self.best_val_loss = load_checkpoint(
-                self.model, self.optimizer, resume_from, self.device
+                self.model, self.optimizer, resume_from, self.device, self.scaler
             )
             self.current_epoch += 1  # Start from next epoch
 
@@ -309,6 +365,7 @@ class Trainer:
                     self.config.checkpoint_dir,
                     "best_model",
                     save_hf=self.config.save_hf_format,
+                    scaler=self.scaler,
                 )
                 print(f"New best model! Val loss: {val_loss:.4f}")
 
@@ -324,6 +381,7 @@ class Trainer:
                     self.config.checkpoint_dir,
                     f"model_epoch_{epoch+1}",
                     save_hf=self.config.save_hf_format,
+                    scaler=self.scaler,
                 )
 
         # Final checkpoint
@@ -336,6 +394,7 @@ class Trainer:
             self.config.checkpoint_dir,
             "final_model",
             save_hf=self.config.save_hf_format,
+            scaler=self.scaler,
         )
 
         # Callbacks

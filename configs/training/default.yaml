@@ -10,6 +10,12 @@ gradient_clip: 1.0
 num_epochs: 30
 batch_size: 32
 
+# Mixed precision training ("no", "fp16", or "bf16")
+# bf16: RTX 3090/4090 and newer (Ampere/Ada architectures) - recommended
+# fp16: RTX 2080/2090 (Turing) - use this for older RTX cards
+# no: Disable mixed precision
+mixed_precision: "bf16"
+
 # Noise schedule
 sigma_min: 1e-4
 sigma_max: 20.0
