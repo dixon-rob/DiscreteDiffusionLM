@@ -1,10 +1,11 @@
+# @package model
 # Base model configuration for Discrete Diffusion Transformer
-# This matches the trained checkpoint configuration
+# Optimized for 8GB VRAM with BF16, gradient checkpointing, and 8-bit Adam
 
 block_size: 256         # Maximum sequence length
-n_layer: 10             # Number of transformer blocks
-n_head: 10              # Number of attention heads
-n_embd: 640             # Embedding dimension
-cond_dim: 160           # Conditioning (timestep embedding) dimension
-dropout: 0.2            # Dropout probability (set to 0.0 for inference)
+n_layer: 72             # Number of transformer blocks
+n_head: 12              # Number of attention heads
+n_embd: 768             # Embedding dimension
+cond_dim: 192           # Conditioning (timestep embedding) dimension
+dropout: 0.1            # Dropout probability (set to 0.0 for inference)
 bias: false             # Whether to use bias in linear layers

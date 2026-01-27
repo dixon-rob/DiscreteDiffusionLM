@@ -30,6 +30,9 @@ def main(cfg: DictConfig) -> None:
         python scripts/train.py learning_rate=1e-4 num_epochs=50
         python scripts/train.py --config-name=training/default model=small
     """
+    # Disable struct mode to allow dynamic access
+    OmegaConf.set_struct(cfg, False)
+
     print("Configuration:")
     print(OmegaConf.to_yaml(cfg))
 
@@ -37,28 +40,29 @@ def main(cfg: DictConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\nUsing device: {device}")
 
-    # Load model config if specified, otherwise use defaults
-    model_cfg = cfg.get("model", {})
+    # Load model config (composed from configs/model/base.yaml via defaults)
+    model_cfg = cfg.model
 
     # Setup data
     train_loader, val_loader, _, tokenizer = setup_dataloaders(
-        dataset_name=cfg.get("dataset_name", "roneneldan/TinyStories"),
-        train_samples=cfg.get("train_samples", 50000),
-        val_samples=cfg.get("val_samples", 2000),
-        context_len=cfg.get("context_length", 256),
-        batch_size=cfg.get("batch_size", 32),
-        num_workers=cfg.get("num_workers", 2),
+        dataset_name=cfg.dataset_name,
+        train_samples=cfg.train_samples,
+        val_samples=cfg.val_samples,
+        context_len=cfg.context_length,
+        batch_size=cfg.batch_size,
+        num_workers=cfg.num_workers,
     )
 
     # Create model config
     config = DiscreteDiffusionConfig(
-        block_size=model_cfg.get("block_size", 256),
-        n_layer=model_cfg.get("n_layer", 10),
-        n_head=model_cfg.get("n_head", 10),
-        n_embd=model_cfg.get("n_embd", 640),
-        cond_dim=model_cfg.get("cond_dim", 160),
-        dropout=model_cfg.get("dropout", 0.2),
-        bias=model_cfg.get("bias", False),
+        block_size=model_cfg.block_size,
+        n_layer=model_cfg.n_layer,
+        n_head=model_cfg.n_head,
+        n_embd=model_cfg.n_embd,
+        cond_dim=model_cfg.cond_dim,
+        dropout=model_cfg.dropout,
+        bias=model_cfg.bias,
+        gradient_checkpointing=cfg.gradient_checkpointing,
     )
 
     # Create model
@@ -67,16 +71,20 @@ def main(cfg: DictConfig) -> None:
 
     # Create training config
     training_config = TrainingConfig(
-        learning_rate=cfg.get("learning_rate", 5e-5),
-        weight_decay=cfg.get("weight_decay", 0.01),
-        gradient_clip=cfg.get("gradient_clip", 1.0),
-        num_epochs=cfg.get("num_epochs", 30),
-        sigma_min=cfg.get("sigma_min", 1e-4),
-        sigma_max=cfg.get("sigma_max", 20.0),
-        sampling_eps=cfg.get("sampling_eps", 1e-3),
-        checkpoint_dir=cfg.get("checkpoint_dir", "./checkpoints"),
-        save_every=cfg.get("save_every", 5),
-        save_hf_format=cfg.get("save_hf_format", True),
+        learning_rate=cfg.learning_rate,
+        weight_decay=cfg.weight_decay,
+        gradient_clip=cfg.gradient_clip,
+        num_epochs=cfg.num_epochs,
+        sigma_min=cfg.sigma_min,
+        sigma_max=cfg.sigma_max,
+        sampling_eps=cfg.sampling_eps,
+        checkpoint_dir=cfg.checkpoint_dir,
+        save_every=cfg.save_every,
+        save_hf_format=cfg.save_hf_format,
+        mixed_precision=cfg.mixed_precision,
+        gradient_checkpointing=cfg.gradient_checkpointing,
+        gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+        use_8bit_optimizer=cfg.use_8bit_optimizer,
     )
 
     # Create trainer

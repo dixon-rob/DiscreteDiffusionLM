@@ -1,3 +1,4 @@
+# @package model
 # Small model configuration for testing/debugging
 # ~5M parameters, suitable for quick experiments
 
