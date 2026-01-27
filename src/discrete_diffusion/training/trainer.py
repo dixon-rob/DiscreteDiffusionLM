@@ -294,13 +294,23 @@ class Trainer:
         self.model.train()
         return total_loss / num_batches if num_batches > 0 else float("inf")
 
-    def train_epoch(self) -> float:
-        """Train for one epoch and return average loss."""
+    def train_epoch(self, start_batch_idx: int = 0) -> float:
+        """
+        Train for one epoch and return average loss.
+
+        Args:
+            start_batch_idx: Batch index to start from (for resuming mid-epoch)
+        """
         self.model.train()
         epoch_loss = 0.0
         num_batches = 0
+        first_batch_processed = False
 
         for batch_idx, batch in enumerate(self.train_loader):
+            # Skip batches if resuming mid-epoch
+            if batch_idx < start_batch_idx:
+                continue
+
             x0 = batch["input_ids"].to(self.device)
 
             # Generate masks for this batch
@@ -339,8 +349,10 @@ class Trainer:
             should_step = (batch_idx + 1) % self.config.gradient_accumulation_steps == 0
 
             # Zero gradients at the start of accumulation
-            if batch_idx % self.config.gradient_accumulation_steps == 0:
+            # Also zero on first batch after resuming (even if not aligned)
+            if batch_idx % self.config.gradient_accumulation_steps == 0 or not first_batch_processed:
                 self.optimizer.zero_grad()
+                first_batch_processed = True
 
             # Scale loss for gradient accumulation
             if is_accumulating:
@@ -419,11 +431,23 @@ class Trainer:
         os.makedirs(self.config.checkpoint_dir, exist_ok=True)
 
         # Resume from checkpoint if specified
+        start_batch_idx = 0
+        resumed_epoch = None
         if resume_from is not None:
             self.current_epoch, self.global_step, self.best_val_loss = load_checkpoint(
                 self.model, self.optimizer, resume_from, self.device, self.scaler
             )
-            self.current_epoch += 1  # Start from next epoch
+            resumed_epoch = self.current_epoch
+
+            # Calculate which batch to start from in the current epoch
+            # global_step tracks optimizer steps, each step processes gradient_accumulation_steps batches
+            batches_per_epoch = len(self.train_loader)
+            total_batches_completed = self.global_step * self.config.gradient_accumulation_steps
+            batches_in_previous_epochs = self.current_epoch * batches_per_epoch
+            start_batch_idx = total_batches_completed - batches_in_previous_epochs
+
+            # Ensure start_batch_idx is valid
+            start_batch_idx = max(0, min(start_batch_idx, batches_per_epoch - 1))
 
         print(f"Starting training for {num_epochs} epochs...")
         print(f"Device: {self.device}")
@@ -435,6 +459,8 @@ class Trainer:
             print(
                 f"Resuming from epoch {self.current_epoch}, step {self.global_step}, best val_loss: {self.best_val_loss:.4f}"
             )
+            if start_batch_idx > 0:
+                print(f"Skipping to batch {start_batch_idx} in epoch {self.current_epoch}")
         print("=" * 60)
 
         for epoch in range(self.current_epoch, num_epochs):
@@ -444,8 +470,9 @@ class Trainer:
             for callback in self.callbacks:
                 callback.on_epoch_start(epoch, self)
 
-            # Train
-            train_loss = self.train_epoch()
+            # Train (use start_batch_idx only for the resumed epoch, then 0 for subsequent epochs)
+            batch_start = start_batch_idx if epoch == resumed_epoch else 0
+            train_loss = self.train_epoch(start_batch_idx=batch_start)
             print(f"Epoch {epoch} complete. Average train loss: {train_loss:.4f}")
 
             # Validate
