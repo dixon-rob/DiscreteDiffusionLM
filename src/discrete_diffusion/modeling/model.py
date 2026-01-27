@@ -20,7 +20,7 @@ class DiscreteDiffusionTransformer(PreTrainedModel):
     """
 
     config_class = DiscreteDiffusionConfig
-    _supports_gradient_checkpointing = True
+    supports_gradient_checkpointing = True
 
     def __init__(self, config: DiscreteDiffusionConfig):
         super().__init__(config)
@@ -76,10 +76,11 @@ class DiscreteDiffusionTransformer(PreTrainedModel):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def _set_gradient_checkpointing(self, module: nn.Module, value: bool = False) -> None:
+    def _set_gradient_checkpointing(self, enable: bool = True, gradient_checkpointing_func=None) -> None:
         """Enable/disable gradient checkpointing for the model."""
-        if isinstance(module, DiscreteDiffusionTransformer):
-            module.gradient_checkpointing = value
+        self.gradient_checkpointing = enable
+        if gradient_checkpointing_func is not None:
+            self._gradient_checkpointing_func = gradient_checkpointing_func
 
     def forward(
         self,
