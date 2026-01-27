@@ -353,6 +353,7 @@ class Trainer:
             if should_step and self.config.save_every_steps > 0:
                 if self.global_step % self.config.save_every_steps == 0:
                     # Quick checkpoint without validation (to avoid slowing down training)
+                    # Uses fixed filename to overwrite and save disk space
                     save_checkpoint(
                         self.model,
                         self.optimizer,
@@ -360,7 +361,7 @@ class Trainer:
                         self.global_step,
                         self.best_val_loss,  # Use best known val loss
                         self.config.checkpoint_dir,
-                        f"checkpoint_step_{self.global_step}",
+                        "checkpoint_latest",  # Fixed filename - overwrites previous
                         save_hf=False,  # Don't save HF format for frequent checkpoints
                         scaler=self.scaler,
                     )
