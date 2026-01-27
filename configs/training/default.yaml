@@ -25,6 +25,10 @@ gradient_checkpointing: true
 # Useful for simulating larger batch sizes when memory-constrained
 gradient_accumulation_steps: 8
 
+# 8-bit Adam optimizer: reduces optimizer memory
+# Requires: bitsandbytes
+use_8bit_optimizer: true
+
 # Noise schedule
 sigma_min: 1e-4
 sigma_max: 20.0

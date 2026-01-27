@@ -40,6 +40,10 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
+# Optional memory optimizations
+memory = [
+    "bitsandbytes>=0.41.0",  # 8-bit Adam optimizer
+]
 
 [project.scripts]
 ddit-train = "scripts.train:main"

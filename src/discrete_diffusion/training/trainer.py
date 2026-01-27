@@ -13,6 +13,13 @@ from ..data.tokenizer import CharacterLevelTokenizer
 from ..diffusion.noise_schedule import GeometricNoise
 from .loss import compute_loss
 
+# Optional: bitsandbytes for 8-bit optimizers
+try:
+    import bitsandbytes as bnb
+    HAS_BITSANDBYTES = True
+except ImportError:
+    HAS_BITSANDBYTES = False
+
 # Vocab size is fixed and determined by the tokenizer
 VOCAB_SIZE = CharacterLevelTokenizer().vocab_size
 
@@ -35,6 +42,7 @@ class TrainingConfig:
     mixed_precision: Literal["no", "fp16", "bf16"] = "no"
     gradient_checkpointing: bool = False
     gradient_accumulation_steps: int = 1
+    use_8bit_optimizer: bool = False
 
 
 @dataclass
@@ -183,12 +191,25 @@ class Trainer:
         )
 
         # Optimizer
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=self.config.learning_rate,
-            betas=self.config.betas,
-            weight_decay=self.config.weight_decay,
-        )
+        if self.config.use_8bit_optimizer:
+            if not HAS_BITSANDBYTES:
+                raise ImportError(
+                    "bitsandbytes is required for 8-bit optimizer. "
+                    "Install with: pip install bitsandbytes"
+                )
+            self.optimizer = bnb.optim.AdamW8bit(
+                self.model.parameters(),
+                lr=self.config.learning_rate,
+                betas=self.config.betas,
+                weight_decay=self.config.weight_decay,
+            )
+        else:
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=self.config.learning_rate,
+                betas=self.config.betas,
+                weight_decay=self.config.weight_decay,
+            )
 
         # Training state
         self.current_epoch = 0
@@ -214,6 +235,10 @@ class Trainer:
         # Gradient accumulation setup
         if self.config.gradient_accumulation_steps > 1:
             print(f"Gradient accumulation enabled: {self.config.gradient_accumulation_steps} steps")
+
+        # 8-bit optimizer setup
+        if self.config.use_8bit_optimizer:
+            print("8-bit Adam optimizer enabled")
 
     @torch.no_grad()
     def validate(self) -> float:
