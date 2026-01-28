@@ -1,9 +1,9 @@
 # @package model
-# Small model configuration for testing/debugging
-# ~5M parameters, suitable for quick experiments
+# Small model configuration for ~1 hour training
+# ~3M parameters, optimized for learning spelling/grammar patterns
 
 block_size: 256         # Maximum sequence length
-n_layer: 4              # Number of transformer blocks
+n_layer: 6              # Number of transformer blocks
 n_head: 4               # Number of attention heads
 n_embd: 256             # Embedding dimension
 cond_dim: 64            # Conditioning (timestep embedding) dimension

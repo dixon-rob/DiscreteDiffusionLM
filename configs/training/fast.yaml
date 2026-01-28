@@ -1,0 +1,50 @@
+# @package _global_
+# Fast training configuration for ~1 hour training
+# Optimized for learning basic spelling and grammar patterns
+
+defaults:
+  - /model/small
+  - _self_
+
+# Optimizer
+learning_rate: 1e-4      # Slightly higher LR for faster convergence
+weight_decay: 0.01
+betas: [0.9, 0.999]
+gradient_clip: 1.0
+
+# Training schedule
+num_epochs: 15           # More epochs to reinforce patterns
+batch_size: 32           # Larger batches for faster throughput
+
+# Mixed precision training ("no", "fp16", or "bf16")
+mixed_precision: "bf16"
+
+# Gradient checkpointing: saves memory by recomputing activations during backward pass
+gradient_checkpointing: false  # Small model doesn't need it
+
+# Gradient accumulation: accumulate gradients over N steps before optimizer update
+# Effective batch size = batch_size * gradient_accumulation_steps = 16 * 2 = 32
+gradient_accumulation_steps: 1
+
+# 8-bit Adam optimizer: reduces optimizer memory
+use_8bit_optimizer: false  # Small model doesn't need it
+
+# Noise schedule
+sigma_min: 1e-4
+sigma_max: 20.0
+
+# Data
+dataset_name: "roneneldan/TinyStories"
+train_samples: 100000    # 100k samples, seen 15 times = 1.5M total
+val_samples: 2000
+context_length: 256
+num_workers: 4           # More workers for faster data loading
+
+# Checkpointing
+checkpoint_dir: "./checkpoints"
+save_every: 5            # Save every 5 epochs
+save_every_steps: 500    # Save every 500 steps
+save_hf_format: true
+
+# Sampling epsilon (avoid t=0 or t=1)
+sampling_eps: 1e-3
