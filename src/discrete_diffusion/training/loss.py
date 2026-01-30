@@ -132,8 +132,10 @@ def compute_loss(
     device = x0.device
 
     # 1) Sample timesteps if not provided
+    # Note: sampling_eps prevents t from getting too close to 0 or 1
+    # At very low t (high noise), the loss can become numerically unstable
     if t is None:
-        t = (1 - sampling_eps) * torch.rand(B, device=device) + sampling_eps
+        t = (1 - 2 * sampling_eps) * torch.rand(B, device=device) + sampling_eps
 
     # 2) Get noise levels from schedule
     sigma_bar, sigma = noise_schedule(t)  # Both [B]
@@ -157,6 +159,9 @@ def compute_loss(
 
     # 6) Weight by sigma(t) and average
     # This is importance weighting - higher noise rates get more weight
+    # Clamp per-token loss to prevent numerical issues at boundary conditions
+    # (can go slightly negative at very low sigma with confident predictions)
+    loss_per_token = torch.clamp(loss_per_token, min=0.0)
     weighted_loss = sigma[:, None] * loss_per_token  # [B, L]
 
     # Apply mask: only compute loss on non-masked positions
